@@ -108,22 +108,33 @@ jobs:
             ghcr.io/${{ steps.repo.outputs.name }}:latest
             ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
 
-  deploy-staging:
+  update-gitops:
     needs: [docker]
     runs-on: ubuntu-latest
-    environment:
-      name: staging
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - name: Deploy to staging
-        run: echo "Deploying to staging environment..."
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: adouadi28-arch/gitops-team-Ryuk
+          token: ${{ secrets.GITOPS_TOKEN }}
 
-  deploy-production:
-    needs: [deploy-staging]
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Deploy to production
-        run: curl -s "${{ secrets.RENDER_DEPLOY_HOOK }}"
+      - name: Lowercase repo name
+        id: repo
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Update image tag in Kustomize base
+        run: |
+          sed -i "s|image: ghcr.io/${{ steps.repo.outputs.name }}:.*|image: ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}|" apps/todo-api/base/deployment.yaml
+
+      - name: Update image tag in Helm values
+        run: |
+          sed -i "s|^  tag: .*|  tag: ${{ github.sha }}|" apps/todo-api-helm/values.yaml
+
+      - name: Commit and push
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add apps/todo-api/base/deployment.yaml apps/todo-api-helm/values.yaml
+          git diff --staged --quiet || git commit -m "chore: deploy ${{ github.sha }}"
+          git push
